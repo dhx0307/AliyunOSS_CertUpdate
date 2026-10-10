@@ -2,9 +2,19 @@ name: alioss-update-auto
 
 on:
   schedule:
-    # cron 使用 UTC：每月 2 日 20:00 UTC = 北京时间每月 3 日 04:00
-    - cron: "0 20 2 * *"
+    # cron 使用 UTC：每周二 20:00 UTC = 北京时间每周三 04:00
+    # 每周只"检查"，证书剩余 <30 天才真正申请，避免触发 Let's Encrypt 频率限制
+    - cron: "0 20 * * 2"
   workflow_dispatch:
+    inputs:
+      staging:
+        description: "测试模式：用 Let's Encrypt 测试环境申请证书，不部署（不消耗正式额度）"
+        type: boolean
+        default: false
+      force:
+        description: "强制申请新证书（忽略剩余有效期检查，会消耗正式额度！）"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,7 +27,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 先看线上证书还剩多久，够久就整个跳过，不去申请新证书
+      - name: Check live certificate
+        id: check
+        env:
+          DOMAIN: ${{ secrets.DOMAIN }}
+          STAGING: ${{ inputs.staging }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          DAYS=0
+          END=$(echo | openssl s_client -servername "$DOMAIN" -connect "$DOMAIN:443" 2>/dev/null \
+                | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2 || true)
+          if [ -n "$END" ]; then
+            DAYS=$(( ( $(date -d "$END" +%s) - $(date +%s) ) / 86400 ))
+          fi
+          echo "线上证书剩余天数：$DAYS"
+
+          if [ "$STAGING" = "true" ] || [ "$FORCE" = "true" ] || [ "$DAYS" -lt 30 ]; then
+            echo "need=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "need=false" >> "$GITHUB_OUTPUT"
+            echo "证书还很充裕，本次跳过申请。"
+          fi
+
       - name: Init Action
+        if: steps.check.outputs.need == 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq certbot
@@ -26,6 +60,7 @@ jobs:
       # certbot 以 sudo 运行，alidns.sh 会读取 root 的 aliyun 配置，
       # 所以这里保留 sudo configure（原项目的做法）
       - name: Aliyun Cli Tools
+        if: steps.check.outputs.need == 'true'
         run: |
           curl -fsSL -o aliyun-cli.tgz https://aliyuncli.alicdn.com/aliyun-cli-linux-latest-amd64.tgz
           tar xzf aliyun-cli.tgz
@@ -39,13 +74,17 @@ jobs:
           sudo chmod +x /usr/local/bin/alidns
 
       - name: Apply for a new certificate
+        if: steps.check.outputs.need == 'true'
         run: |
+          EXTRA=""
+          if [ "${{ inputs.staging }}" = "true" ]; then EXTRA="--test-cert"; fi
           sudo certbot certonly -d "${{ secrets.DOMAIN }}" --manual --preferred-challenges dns \
                 --manual-auth-hook "/usr/local/bin/alidns" \
                 --manual-cleanup-hook "/usr/local/bin/alidns clean" \
-                --agree-tos --email "${{ secrets.EMAIL }}" --non-interactive
+                --agree-tos --email "${{ secrets.EMAIL }}" --non-interactive $EXTRA
 
       - name: Run OSS Cert Update
+        if: steps.check.outputs.need == 'true' && inputs.staging != true
         run: |
           CERT_PATH="/etc/letsencrypt/live/${{ secrets.DOMAIN }}"
           export CERTIFICATE="$(sudo cat $CERT_PATH/fullchain.pem)"
@@ -59,8 +98,9 @@ jobs:
             --private-key "$PRIVATE_KEY" \
             --certificate "$CERTIFICATE"
 
-      # 新增：更新 CDN 证书（用 sudo，复用上面给 root 配好的 aliyun 凭证）
+      # 更新 CDN 证书（用 sudo，复用上面给 root 配好的 aliyun 凭证）
       - name: Update CDN Cert
+        if: steps.check.outputs.need == 'true' && inputs.staging != true
         run: |
           CERT_PATH="/etc/letsencrypt/live/${{ secrets.DOMAIN }}"
           CERT_NAME="cert-$(date -u +%Y%m%d%H%M%S)"
