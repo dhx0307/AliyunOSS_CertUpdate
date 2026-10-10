@@ -50,13 +50,13 @@ jobs:
           DOMAIN: ${{ secrets.DOMAIN }}
           REGION: ${{ secrets.REGION }}
         run: |
-          # 1. 使用 sudo 全局安装阿里云 OSS SDK（这样 root 用户也能找到 oss2 模块）
+          # 1. 安装阿里云 OSS Python SDK
           sudo pip install oss2
           
-          # 2. 设置证书路径（导出为环境变量，供 Python 读取）
+          # 2. 设置证书路径
           export CERT_PATH="/etc/letsencrypt/live/${{ secrets.DOMAIN }}"
           
-          # 3. 将 Python 脚本写入临时文件，彻底避开 YAML 缩进问题
+          # 3. 将 Python 脚本写入临时文件（彻底避开 YAML 缩进问题）
           cat << 'EOF' > /tmp/update_cert.py
           import os
           import oss2
@@ -65,16 +65,31 @@ jobs:
           bucket = oss2.Bucket(auth, os.environ['ENDPOINT'], os.environ['BUCKET_NAME'], region=os.environ['REGION'])
           
           with open(os.environ['CERT_PATH'] + '/fullchain.pem', 'r') as f:
-              cert = f.read()
+              cert_content = f.read()
           with open(os.environ['CERT_PATH'] + '/privkey.pem', 'r') as f:
-              key = f.read()
-              
-          print('正在更新 OSS 自定义域名证书...')
-          bucket.put_cname(os.environ['DOMAIN'], cert, key)
+              private_key = f.read()
+          
+          # 构造 OSS PutCname 接口所需的 XML 请求体
+          xml_body = f'''<BucketCnameConfiguration>
+            <Cname>
+              <Domain>{os.environ['DOMAIN']}</Domain>
+              <Certificate>
+                <Type>Certificate</Type>
+                <CertContent><![CDATA[{cert_content}]]></CertContent>
+                <PrivateKey><![CDATA[{private_key}]]></PrivateKey>
+              </Certificate>
+            </Cname>
+          </BucketCnameConfiguration>'''
+          
+          headers = {'Content-Type': 'application/xml'}
+          params = {'cname': ''}
+          print('正在通过 OSS 底层 API 更新自定义域名证书...')
+          # 使用 bucket._do 直接发送 PUT 请求，因为 oss2 没有 put_cname 方法
+          resp = bucket._do('PUT', '/', params=params, headers=headers, body=xml_body)
           print('OSS 证书更新成功！')
           EOF
           
-          # 4. 使用 sudo -E 执行脚本（-E 保留环境变量，sudo 提供读取证书的权限）
+          # 4. 使用 sudo -E 执行脚本
           sudo -E python3 /tmp/update_cert.py
           
           # 5. 关于 CDN 的强烈建议：先注释掉，等 OSS 跑通后手动去阿里云控制台更新一次
