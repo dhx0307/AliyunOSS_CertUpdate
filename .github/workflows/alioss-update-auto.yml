@@ -40,16 +40,18 @@ jobs:
                 --manual-cleanup-hook "/usr/local/bin/alidns clean" \
                 --agree-tos --email ${{ secrets.EMAIL }} --non-interactive
 
-      - name: Run OSS Cert Update
+      - name: Deploy Cert to OSS and CDN
         run: |
           CERT_PATH="/etc/letsencrypt/live/${{ secrets.DOMAIN }}"
-          export CERTIFICATE="$(sudo cat $CERT_PATH/fullchain.pem)"
-          export PRIVATE_KEY="$(sudo cat $CERT_PATH/privkey.pem)"
-          python oss_update.py \
-            --access-key-id "${{ secrets.ACCESS_KEY_ID }}" \
-            --access-key-secret "${{ secrets.ACCESS_KEY_SECRET }}" \
-            --endpoint "${{ secrets.ENDPOINT }}" \
-            --bucket-name "${{ secrets.BUCKET_NAME }}" \
-            --target-cname "${{ secrets.DOMAIN }}" \
-            --private-key "$PRIVATE_KEY" \
-            --certificate "$CERTIFICATE"
+          CERTIFICATE="$(sudo cat $CERT_PATH/fullchain.pem)"
+          PRIVATE_KEY="$(sudo cat $CERT_PATH/privkey.pem)"
+          
+          # 1. 更新 OSS 自定义域名的证书
+          echo "正在更新 OSS 证书..."
+          aliyun oss PutCname --BucketName "${{ secrets.BUCKET_NAME }}" --Domain "${{ secrets.DOMAIN }}" --Certificate "$CERTIFICATE" --PrivateKey "$PRIVATE_KEY"
+          
+          # 2. 同步更新 CDN 加速域名的证书（关键！）
+          echo "正在更新 CDN 证书..."
+          aliyun cdn SetDomainServerCertificate --DomainName "${{ secrets.DOMAIN }}" --SSLProtocol on --ServerCertificate "$CERTIFICATE" --PrivateKey "$PRIVATE_KEY"
+          
+          echo "证书部署完成！"
