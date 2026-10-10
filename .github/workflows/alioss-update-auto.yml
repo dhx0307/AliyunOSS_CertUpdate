@@ -91,10 +91,21 @@ jobs:
         run: |
           EXTRA=""
           if [ "${{ inputs.staging }}" = "true" ]; then EXTRA="--test-cert"; fi
-          sudo certbot certonly -d "${{ secrets.DOMAIN }}" --manual --preferred-challenges dns \
-                --manual-auth-hook "/usr/local/bin/alidns" \
-                --manual-cleanup-hook "/usr/local/bin/alidns clean" \
-                --agree-tos --email "${{ secrets.EMAIL }}" --non-interactive $EXTRA
+          # 记录写入后多等 90 秒，让阿里云 DNS 各节点同步完，再让 Let's Encrypt 去验证
+          # DNS 验证偶发失败（如 SERVFAIL）时，最多重试 3 次
+          OK=0
+          for i in 1 2 3; do
+            if sudo certbot certonly -d "${{ secrets.DOMAIN }}" --manual --preferred-challenges dns \
+                  --manual-auth-hook "/usr/local/bin/alidns && sleep 90" \
+                  --manual-cleanup-hook "/usr/local/bin/alidns clean" \
+                  --agree-tos --email "${{ secrets.EMAIL }}" --non-interactive $EXTRA; then
+              OK=1
+              break
+            fi
+            echo "第 $i 次申请失败，60 秒后重试"
+            sleep 60
+          done
+          [ "$OK" = "1" ]
 
       - name: Run OSS Cert Update
         if: steps.check.outputs.need == 'true' && (inputs.staging != true || inputs.deploy_staging == true)
