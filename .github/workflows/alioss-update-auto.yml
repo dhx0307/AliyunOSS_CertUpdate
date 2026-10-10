@@ -35,7 +35,8 @@ jobs:
       - name: Apply for a new certificate
         run: |
           sudo mkdir -p /etc/letsencrypt/certs
-          sudo certbot certonly -d "${{ secrets.DOMAIN }}" --manual --preferred-challenges dns \
+          # 注意这里加上了 --staging，使用测试环境避免触发频率限制
+          sudo certbot certonly --staging -d "${{ secrets.DOMAIN }}" --manual --preferred-challenges dns \
                 --manual-auth-hook "/usr/local/bin/alidns" \
                 --manual-cleanup-hook "/usr/local/bin/alidns clean" \
                 --agree-tos --email ${{ secrets.EMAIL }} --non-interactive
