@@ -60,27 +60,45 @@ jobs:
         run: |
           # 1. 设置证书路径
           CERT_PATH="/etc/letsencrypt/live/${{ secrets.DOMAIN }}"
-          CERTIFICATE="$(sudo cat $CERT_PATH/fullchain.pem)"
-          PRIVATE_KEY="$(sudo cat $CERT_PATH/privkey.pem)"
           
-          # 2. 使用阿里云 CLI 的 OpenAPI 原生调用更新 OSS 证书（绕过损坏的 SDK）
+          # 2. 处理 OSS 证书（通过 XML 文件传递，避开多行文本崩溃）
           echo "正在更新 OSS 自定义域名证书..."
+          cat << EOF > /tmp/put_cname.xml
+          <BucketCnameConfiguration>
+            <Cname>
+              <Domain>${{ secrets.DOMAIN }}</Domain>
+              <Certificate>
+                <Type>Certificate</Type>
+                <CertContent><![CDATA[$(sudo cat $CERT_PATH/fullchain.pem)]]></CertContent>
+                <PrivateKey><![CDATA[$(sudo cat $CERT_PATH/privkey.pem)]]></PrivateKey>
+              </Certificate>
+            </Cname>
+          </BucketCnameConfiguration>
+          EOF
+          
           aliyun --product Oss --version 2019-05-17 PutCname \
             --BucketName "${{ secrets.BUCKET_NAME }}" \
-            --DomainName "${{ secrets.DOMAIN }}" \
-            --Certificate "$CERTIFICATE" \
-            --PrivateKey "$PRIVATE_KEY" \
+            --body file:///tmp/put_cname.xml \
             --access-key-id "${{ secrets.ACCESS_KEY_ID }}" \
             --access-key-secret "${{ secrets.ACCESS_KEY_SECRET }}"
-            
-          # 3. 同步更新 CDN 证书（一次搞定，不用手动去点控制台了）
+          
+          # 3. 处理 CDN 证书（通过 JSON 文件传递，用 awk 转义换行符）
           echo "正在更新 CDN 证书..."
+          CERT_CONTENT=$(sudo cat $CERT_PATH/fullchain.pem | awk '{printf "%s\\n", $0}')
+          PRIVATE_KEY=$(sudo cat $CERT_PATH/privkey.pem | awk '{printf "%s\\n", $0}')
+          
+          cat << EOF > /tmp/cdn_cert.json
+          {
+            "DomainName": "${{ secrets.DOMAIN }}",
+            "SSLProtocol": "on",
+            "ServerCertificate": "$CERT_CONTENT",
+            "PrivateKey": "$PRIVATE_KEY"
+          }
+          EOF
+          
           aliyun --product Cdn --version 2014-11-11 SetDomainServerCertificate \
-            --DomainName "${{ secrets.DOMAIN }}" \
-            --SSLProtocol on \
-            --ServerCertificate "$CERTIFICATE" \
-            --PrivateKey "$PRIVATE_KEY" \
+            --body file:///tmp/cdn_cert.json \
             --access-key-id "${{ secrets.ACCESS_KEY_ID }}" \
             --access-key-secret "${{ secrets.ACCESS_KEY_SECRET }}"
-            
+          
           echo "所有证书部署完成！"
