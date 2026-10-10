@@ -61,50 +61,37 @@ jobs:
           BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
           DOMAIN: ${{ secrets.DOMAIN }}
           REGION: ${{ secrets.REGION }}
+          CERT_PATH: /etc/letsencrypt/live/${{ secrets.DOMAIN }}
         run: |
-          # 1. 用户级安装依赖（绝对不要用 sudo pip，会直接崩溃）
-          pip install --user --upgrade oss2 aliyun-python-sdk-cdn
+          # 1. 用户级安装依赖（绝对不要用 sudo pip）
+          pip install --user --upgrade oss2
           
-          # 2. 解决权限问题：把证书复制到当前目录，并归属当前用户
-          mkdir -p ./certs
-          sudo cp /etc/letsencrypt/live/${{ secrets.DOMAIN }}/fullchain.pem ./certs/
-          sudo cp /etc/letsencrypt/live/${{ secrets.DOMAIN }}/privkey.pem ./certs/
-          sudo chown -R $USER:$USER ./certs/
+          # 2. 复制证书到临时目录，并赋予当前用户权限
+          sudo cp $CERT_PATH/fullchain.pem /tmp/fullchain.pem
+          sudo cp $CERT_PATH/privkey.pem /tmp/privkey.pem
+          sudo chown $USER:$USER /tmp/fullchain.pem /tmp/privkey.pem
           
-          # 3. 写入 Python 脚本
-          cat << 'EOF' > /tmp/deploy_cert.py
-          import os
-          import oss2
-          from aliyunsdkcore.client import AcsClient
-          from aliyunsdkcdn.request.v20141111 import SetDomainServerCertificateRequest
-          
-          with open('./certs/fullchain.pem', 'r') as f:
-              cert_content = f.read()
-          with open('./certs/privkey.pem', 'r') as f:
-              private_key = f.read()
-              
-          ak_id = os.environ['ACCESS_KEY_ID']
-          ak_secret = os.environ['ACCESS_KEY_SECRET']
-          domain = os.environ['DOMAIN']
-          
-          # 更新 OSS
-          print('正在更新 OSS...', flush=True)
-          auth = oss2.Auth(ak_id, ak_secret)
+          # 3. 更新 OSS（修正了方法名：put_bucket_cname）
+          echo "正在更新 OSS..."
+          python3 -c "
+          import os, oss2
+          with open('/tmp/fullchain.pem', 'r') as f: cert = f.read()
+          with open('/tmp/privkey.pem', 'r') as f: key = f.read()
+          auth = oss2.Auth(os.environ['ACCESS_KEY_ID'], os.environ['ACCESS_KEY_SECRET'])
           bucket = oss2.Bucket(auth, os.environ['ENDPOINT'], os.environ['BUCKET_NAME'], region=os.environ['REGION'])
-          bucket.put_bucket_cname(domain, cert_content, private_key)
-          print('OSS 更新成功！', flush=True)
+          bucket.put_bucket_cname(os.environ['DOMAIN'], cert, key)
+          print('OSS 更新成功！')
+          "
           
-          # 更新 CDN
-          print('正在更新 CDN...', flush=True)
-          client = AcsClient(ak_id, ak_secret, os.environ['REGION'])
-          request = SetDomainServerCertificateRequest.SetDomainServerCertificateRequest()
-          request.set_DomainName(domain)
-          request.set_SSLProtocol("on")
-          request.set_ServerCertificate(cert_content)
-          request.set_PrivateKey(private_key)
-          client.do_action_with_exception(request)
-          print('CDN 更新成功！', flush=True)
-          EOF
+          # 4. 更新 CDN（用官方 CLI 的 file:// 技巧，彻底避开多行文本崩溃）
+          echo "正在更新 CDN..."
+          aliyun cdn SetDomainServerCertificate \
+            --access-key-id "${{ secrets.ACCESS_KEY_ID }}" \
+            --access-key-secret "${{ secrets.ACCESS_KEY_SECRET }}" \
+            --region "${{ secrets.REGION }}" \
+            --DomainName "${{ secrets.DOMAIN }}" \
+            --SSLProtocol on \
+            --ServerCertificate file:///tmp/fullchain.pem \
+            --PrivateKey file:///tmp/privkey.pem
           
-          # 4. 直接执行（普通用户权限运行，不需要 sudo）
-          python3 /tmp/deploy_cert.py 2>&1
+          echo "全部证书部署完成！"
