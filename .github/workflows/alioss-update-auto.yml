@@ -57,41 +57,49 @@ jobs:
         env:
           ACCESS_KEY_ID: ${{ secrets.ACCESS_KEY_ID }}
           ACCESS_KEY_SECRET: ${{ secrets.ACCESS_KEY_SECRET }}
-          ENDPOINT: ${{ secrets.ENDPOINT }}
           BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
           DOMAIN: ${{ secrets.DOMAIN }}
-          REGION: ${{ secrets.REGION }}
-          CERT_PATH: /etc/letsencrypt/live/${{ secrets.DOMAIN }}
         run: |
-          # 1. 用户级安装依赖（绝对不要用 sudo pip）
-          pip install --user --upgrade oss2
+          # 1. 安装必要工具（jq 用于安全构造 JSON）
+          sudo apt-get install -y jq
           
-          # 2. 复制证书到临时目录，并赋予当前用户权限
-          sudo cp $CERT_PATH/fullchain.pem /tmp/fullchain.pem
-          sudo cp $CERT_PATH/privkey.pem /tmp/privkey.pem
+          # 2. 将证书复制到临时目录，并赋予当前用户权限（彻底解决权限问题）
+          sudo cp /etc/letsencrypt/live/${{ secrets.DOMAIN }}/fullchain.pem /tmp/fullchain.pem
+          sudo cp /etc/letsencrypt/live/${{ secrets.DOMAIN }}/privkey.pem /tmp/privkey.pem
           sudo chown $USER:$USER /tmp/fullchain.pem /tmp/privkey.pem
           
-          # 3. 更新 OSS（修正了方法名：put_bucket_cname）
-          echo "正在更新 OSS..."
-          python3 -c "
-          import os, oss2
-          with open('/tmp/fullchain.pem', 'r') as f: cert = f.read()
-          with open('/tmp/privkey.pem', 'r') as f: key = f.read()
-          auth = oss2.Auth(os.environ['ACCESS_KEY_ID'], os.environ['ACCESS_KEY_SECRET'])
-          bucket = oss2.Bucket(auth, os.environ['ENDPOINT'], os.environ['BUCKET_NAME'], region=os.environ['REGION'])
-          bucket.put_bucket_cname(os.environ['DOMAIN'], cert, key)
-          print('OSS 更新成功！')
-          "
+          # 3. 构造 OSS PutCname API 所需的 XML 体
+          cat << EOF > /tmp/put_cname.xml
+          <BucketCnameConfiguration>
+            <Cname>
+              <Domain>${{ secrets.DOMAIN }}</Domain>
+              <Certificate>
+                <Type>Certificate</Type>
+                <CertContent><![CDATA[$(cat /tmp/fullchain.pem)]]></CertContent>
+                <PrivateKey><![CDATA[$(cat /tmp/privkey.pem)]]></PrivateKey>
+              </Certificate>
+            </Cname>
+          </BucketCnameConfiguration>
+          EOF
           
-          # 4. 更新 CDN（用官方 CLI 的 file:// 技巧，彻底避开多行文本崩溃）
-          echo "正在更新 CDN..."
-          aliyun cdn SetDomainServerCertificate \
+          # 4. 使用阿里云 CLI 的 file:// 机制更新 OSS 证书
+          echo "正在更新 OSS 自定义域名证书..."
+          aliyun oss PutCname --BucketName "${{ secrets.BUCKET_NAME }}" \
+            --body file:///tmp/put_cname.xml \
             --access-key-id "${{ secrets.ACCESS_KEY_ID }}" \
-            --access-key-secret "${{ secrets.ACCESS_KEY_SECRET }}" \
-            --region "${{ secrets.REGION }}" \
-            --DomainName "${{ secrets.DOMAIN }}" \
-            --SSLProtocol on \
-            --ServerCertificate file:///tmp/fullchain.pem \
-            --PrivateKey file:///tmp/privkey.pem
+            --access-key-secret "${{ secrets.ACCESS_KEY_SECRET }}"
           
-          echo "全部证书部署完成！"
+          # 5. 构造 CDN 所需的 JSON 体（用 jq 自动转义换行符）
+          jq -n --arg domain "${{ secrets.DOMAIN }}" \
+                --rawfile cert /tmp/fullchain.pem \
+                --rawfile key /tmp/privkey.pem \
+            '{DomainName: $domain, SSLProtocol: "on", ServerCertificate: $cert, PrivateKey: $key}' > /tmp/cdn_cert.json
+          
+          # 6. 使用阿里云 CLI 的 file:// 机制更新 CDN 证书
+          echo "正在更新 CDN 证书..."
+          aliyun cdn SetDomainServerCertificate \
+            --body file:///tmp/cdn_cert.json \
+            --access-key-id "${{ secrets.ACCESS_KEY_ID }}" \
+            --access-key-secret "${{ secrets.ACCESS_KEY_SECRET }}"
+          
+          echo "所有证书部署完成！"
