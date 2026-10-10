@@ -50,36 +50,37 @@ jobs:
           DOMAIN: ${{ secrets.DOMAIN }}
           REGION: ${{ secrets.REGION }}
         run: |
-          # 1. 安装阿里云 OSS Python SDK
+          # 1. 使用 sudo 全局安装阿里云 OSS SDK（这样 root 用户也能找到 oss2 模块）
           sudo pip install oss2
           
-          # 2. 设置证书路径
-          CERT_PATH="/etc/letsencrypt/live/${{ secrets.DOMAIN }}"
-          export CERT_PATH
+          # 2. 设置证书路径（导出为环境变量，供 Python 读取）
+          export CERT_PATH="/etc/letsencrypt/live/${{ secrets.DOMAIN }}"
           
-          # 3. 使用内联 Python 脚本直接更新 OSS 证书（绕过区域报错）
-          sudo python3 -c "
+          # 3. 将 Python 脚本写入临时文件，彻底避开 YAML 缩进问题
+          cat << 'EOF' > /tmp/update_cert.py
           import os
           import oss2
           
           auth = oss2.Auth(os.environ['ACCESS_KEY_ID'], os.environ['ACCESS_KEY_SECRET'])
-          # 注意：这里明确传入 region，避免 SDK 默认回退到杭州
           bucket = oss2.Bucket(auth, os.environ['ENDPOINT'], os.environ['BUCKET_NAME'], region=os.environ['REGION'])
           
           with open(os.environ['CERT_PATH'] + '/fullchain.pem', 'r') as f:
               cert = f.read()
           with open(os.environ['CERT_PATH'] + '/privkey.pem', 'r') as f:
               key = f.read()
-          
+              
           print('正在更新 OSS 自定义域名证书...')
           bucket.put_cname(os.environ['DOMAIN'], cert, key)
           print('OSS 证书更新成功！')
-          "
+          EOF
           
-          # 4. 使用阿里云 CLI 同步更新 CDN 证书
-          echo "正在更新 CDN 证书..."
-          CERTIFICATE="$(sudo cat $CERT_PATH/fullchain.pem)"
-          PRIVATE_KEY="$(sudo cat $CERT_PATH/privkey.pem)"
-          aliyun cdn SetDomainServerCertificate --DomainName "${{ secrets.DOMAIN }}" --SSLProtocol on --ServerCertificate "$CERTIFICATE" --PrivateKey "$PRIVATE_KEY"
+          # 4. 使用 sudo -E 执行脚本（-E 保留环境变量，sudo 提供读取证书的权限）
+          sudo -E python3 /tmp/update_cert.py
           
-          echo "所有证书部署完成！"
+          # 5. 关于 CDN 的强烈建议：先注释掉，等 OSS 跑通后手动去阿里云控制台更新一次
+          # echo "正在更新 CDN 证书..."
+          # CERTIFICATE="$(sudo cat $CERT_PATH/fullchain.pem)"
+          # PRIVATE_KEY="$(sudo cat $CERT_PATH/privkey.pem)"
+          # aliyun cdn SetDomainServerCertificate --DomainName "${{ secrets.DOMAIN }}" --SSLProtocol on --ServerCertificate "$CERTIFICATE" --PrivateKey "$PRIVATE_KEY"
+          
+          echo "OSS 证书部署完成！请前往 CDN 控制台手动更新 CDN 证书！"
