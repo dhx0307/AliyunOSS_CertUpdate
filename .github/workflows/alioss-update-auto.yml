@@ -61,56 +61,50 @@ jobs:
           BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
           DOMAIN: ${{ secrets.DOMAIN }}
           REGION: ${{ secrets.REGION }}
-          CERT_PATH: /etc/letsencrypt/live/${{ secrets.DOMAIN }}
         run: |
-          # 1. 安装 Python SDK
-          sudo pip install --upgrade oss2 aliyun-python-sdk-cdn
+          # 1. 用户级安装依赖（绝对不要用 sudo pip，会直接崩溃）
+          pip install --user --upgrade oss2 aliyun-python-sdk-cdn
           
-          # 2. 将 Python 脚本写入文件
+          # 2. 解决权限问题：把证书复制到当前目录，并归属当前用户
+          mkdir -p ./certs
+          sudo cp /etc/letsencrypt/live/${{ secrets.DOMAIN }}/fullchain.pem ./certs/
+          sudo cp /etc/letsencrypt/live/${{ secrets.DOMAIN }}/privkey.pem ./certs/
+          sudo chown -R $USER:$USER ./certs/
+          
+          # 3. 写入 Python 脚本
           cat << 'EOF' > /tmp/deploy_cert.py
           import os
           import oss2
           from aliyunsdkcore.client import AcsClient
           from aliyunsdkcdn.request.v20141111 import SetDomainServerCertificateRequest
           
+          with open('./certs/fullchain.pem', 'r') as f:
+              cert_content = f.read()
+          with open('./certs/privkey.pem', 'r') as f:
+              private_key = f.read()
+              
           ak_id = os.environ['ACCESS_KEY_ID']
           ak_secret = os.environ['ACCESS_KEY_SECRET']
-          endpoint = os.environ['ENDPOINT']
-          bucket_name = os.environ['BUCKET_NAME']
           domain = os.environ['DOMAIN']
-          region = os.environ['REGION']
-          cert_path = os.environ['CERT_PATH']
           
-          with open(os.path.join(cert_path, 'fullchain.pem'), 'r') as f:
-              cert_content = f.read()
-          with open(os.path.join(cert_path, 'privkey.pem'), 'r') as f:
-              private_key = f.read()
-          
-          # 1. 更新 OSS 证书（修正方法名：put_bucket_cname）
-          print('正在更新 OSS 自定义域名证书...')
+          # 更新 OSS
+          print('正在更新 OSS...', flush=True)
           auth = oss2.Auth(ak_id, ak_secret)
-          bucket = oss2.Bucket(auth, endpoint, bucket_name, region=region)
+          bucket = oss2.Bucket(auth, os.environ['ENDPOINT'], os.environ['BUCKET_NAME'], region=os.environ['REGION'])
           bucket.put_bucket_cname(domain, cert_content, private_key)
-          print('OSS 证书更新成功！')
+          print('OSS 更新成功！', flush=True)
           
-          # 2. 更新 CDN 证书（使用官方 Python SDK）
-          print('正在更新 CDN 证书...')
-          client = AcsClient(ak_id, ak_secret, region)
+          # 更新 CDN
+          print('正在更新 CDN...', flush=True)
+          client = AcsClient(ak_id, ak_secret, os.environ['REGION'])
           request = SetDomainServerCertificateRequest.SetDomainServerCertificateRequest()
           request.set_DomainName(domain)
           request.set_SSLProtocol("on")
           request.set_ServerCertificate(cert_content)
           request.set_PrivateKey(private_key)
           client.do_action_with_exception(request)
-          print('CDN 证书更新成功！')
+          print('CDN 更新成功！', flush=True)
           EOF
           
-          # 3. 执行脚本（显式传递变量，防止环境变量丢失）
-          sudo ACCESS_KEY_ID="${{ secrets.ACCESS_KEY_ID }}" \
-               ACCESS_KEY_SECRET="${{ secrets.ACCESS_KEY_SECRET }}" \
-               ENDPOINT="${{ secrets.ENDPOINT }}" \
-               BUCKET_NAME="${{ secrets.BUCKET_NAME }}" \
-               DOMAIN="${{ secrets.DOMAIN }}" \
-               REGION="${{ secrets.REGION }}" \
-               CERT_PATH="/etc/letsencrypt/live/${{ secrets.DOMAIN }}" \
-               python3 /tmp/deploy_cert.py
+          # 4. 直接执行（普通用户权限运行，不需要 sudo）
+          python3 /tmp/deploy_cert.py 2>&1
