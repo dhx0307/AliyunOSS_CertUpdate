@@ -96,15 +96,15 @@ jobs:
           params = {'cname': ''}
           print('正在通过 OSS API 更新自定义域名证书...')
           
-          # 关键修复：显式将 key 作为关键字参数传入，避免位置参数错乱
-          resp = bucket._do('PUT', key='/', params=params, headers=headers, body=xml_body)
+          # 关键修复：显式传入 bucket_name，对齐 SDK 底层参数
+          resp = bucket._do('PUT', bucket_name=os.environ['BUCKET_NAME'], key='/', params=params, headers=headers, body=xml_body)
           print('OSS 证书更新成功！')
           EOF
           
           # 4. 执行脚本
           sudo -E python3 /tmp/update_cert.py
           
-          # 5. CDN 部分（强烈建议先手动去阿里云控制台更新，先注释掉）
+          # 5. CDN 部分（再次强烈建议先手动去阿里云控制台更新，先注释掉）
           # echo "正在更新 CDN 证书..."
           # CERTIFICATE="$(sudo cat $CERT_PATH/fullchain.pem)"
           # PRIVATE_KEY="$(sudo cat $CERT_PATH/privkey.pem)"
