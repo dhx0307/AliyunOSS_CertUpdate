@@ -59,18 +59,17 @@ jobs:
           ACCESS_KEY_SECRET: ${{ secrets.ACCESS_KEY_SECRET }}
           BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
           DOMAIN: ${{ secrets.DOMAIN }}
-          REGION: ${{ secrets.REGION }}
         run: |
-          # 1. 安装必要工具
+          # 1. 安装工具
           sudo apt-get install -y jq unzip
 
-          # 2. 将证书复制到临时目录，并赋予当前用户权限（彻底解决权限问题）
+          # 2. 复制证书到临时目录，赋予权限（绝不使用 sudo -E 传环境变量）
           sudo cp /etc/letsencrypt/live/${{ secrets.DOMAIN }}/fullchain.pem /tmp/fullchain.pem
           sudo cp /etc/letsencrypt/live/${{ secrets.DOMAIN }}/privkey.pem /tmp/privkey.pem
           sudo chown $USER:$USER /tmp/fullchain.pem /tmp/privkey.pem
           sudo chmod 600 /tmp/fullchain.pem /tmp/privkey.pem
 
-          # 3. 下载并安装官方 ossutil 工具
+          # 3. 下载官方 ossutil
           echo "正在下载 ossutil..."
           curl -o ossutil.zip https://gosspublic.alicdn.com/ossutil/1.7.19/ossutil-v1.7.19-linux-amd64.zip
           unzip -o ossutil.zip
@@ -78,7 +77,7 @@ jobs:
           sudo mv ossutil-v1.7.19-linux-amd64/ossutil64 /usr/local/bin/ossutil
 
           # 4. 构造 OSS PutCname API 所需的 XML 文件
-          cat << EOF > /tmp/cname-configuration.xml
+          cat << EOF > /tmp/put_cname.xml
           <?xml version="1.0" encoding="UTF-8"?>
           <BucketCnameConfiguration>
             <Cname>
@@ -92,22 +91,22 @@ jobs:
           </BucketCnameConfiguration>
           EOF
 
-          # 5. 使用 ossutil 的 api put-cname 命令更新 OSS 证书
+          # 5. 更新 OSS 证书（关键修复：参数是 --body，不是 --cname-configuration）
           echo "正在更新 OSS 自定义域名证书..."
           ossutil api put-cname \
             --bucket "${{ secrets.BUCKET_NAME }}" \
-            --cname-configuration file:///tmp/cname-configuration.xml \
+            --body file:///tmp/put_cname.xml \
             --access-key-id "${{ secrets.ACCESS_KEY_ID }}" \
             --access-key-secret "${{ secrets.ACCESS_KEY_SECRET }}" \
             --endpoint "oss-${{ secrets.REGION }}.aliyuncs.com"
 
-          # 6. 构造 CDN 所需的 JSON 体（用 jq 自动转义换行符）
+          # 6. 构造 CDN 所需的 JSON 体（用 jq 自动转义）
           jq -n --arg domain "${{ secrets.DOMAIN }}" \
                 --rawfile cert /tmp/fullchain.pem \
                 --rawfile key /tmp/privkey.pem \
             '{DomainName: $domain, SSLProtocol: "on", ServerCertificate: $cert, PrivateKey: $key}' > /tmp/cdn_cert.json
 
-          # 7. 使用阿里云 CLI 更新 CDN 证书
+          # 7. 更新 CDN 证书（同样使用 --body file:// 绕过换行符崩溃）
           echo "正在更新 CDN 证书..."
           aliyun cdn SetDomainServerCertificate \
             --body file:///tmp/cdn_cert.json \
