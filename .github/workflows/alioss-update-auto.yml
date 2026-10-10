@@ -33,15 +33,18 @@ jobs:
           sudo mv alidns.sh /usr/local/bin/alidns
           sudo chmod +x /usr/local/bin/alidns
 
-      - name: Issue Certificate with acme.sh (Staging for testing)
+      - name: Issue Certificate with acme.sh (Staging)
         env:
           Ali_Key: ${{ secrets.ACCESS_KEY_ID }}
           Ali_Secret: ${{ secrets.ACCESS_KEY_SECRET }}
         run: |
-          # 注意这里加上了 --staging，使用测试环境避免触发频率限制
-          acme.sh --issue --dns dns_ali -d "${{ secrets.DOMAIN }}" --server letsencrypt --staging
+          # 清理可能存在的旧配置
+          acme.sh --remove -d "${{ secrets.DOMAIN }}" || true
           
-          # 安装证书到固定路径
+          # 注意这里使用的是 --server letsencrypt_test，这才是 acme.sh 指定测试环境的方式
+          acme.sh --issue --dns dns_ali -d "${{ secrets.DOMAIN }}" --server letsencrypt_test
+          
+          # 安装证书
           acme.sh --install-cert -d "${{ secrets.DOMAIN }}" \
             --key-file /etc/letsencrypt/live/${{ secrets.DOMAIN }}/privkey.pem \
             --fullchain-file /etc/letsencrypt/live/${{ secrets.DOMAIN }}/fullchain.pem
