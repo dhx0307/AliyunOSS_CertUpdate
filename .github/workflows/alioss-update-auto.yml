@@ -41,30 +41,44 @@ jobs:
                 --agree-tos --email ${{ secrets.EMAIL }} --non-interactive
 
       - name: Deploy Cert to OSS and CDN
+        env:
+          ACCESS_KEY_ID: ${{ secrets.ACCESS_KEY_ID }}
+          ACCESS_KEY_SECRET: ${{ secrets.ACCESS_KEY_SECRET }}
+          ENDPOINT: ${{ secrets.ENDPOINT }}
+          BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
+          DOMAIN: ${{ secrets.DOMAIN }}
+          REGION: ${{ secrets.REGION }}
         run: |
+          # 1. 安装阿里云 OSS Python SDK
+          pip install oss2
+          
+          # 2. 设置证书路径
           CERT_PATH="/etc/letsencrypt/live/${{ secrets.DOMAIN }}"
+          export CERT_PATH
+          
+          # 3. 使用内联 Python 脚本直接更新 OSS 证书（绕过区域报错）
+          python3 -c "
+import os
+import oss2
+
+auth = oss2.Auth(os.environ['ACCESS_KEY_ID'], os.environ['ACCESS_KEY_SECRET'])
+# 注意：这里明确传入 region，避免 SDK 默认回退到杭州
+bucket = oss2.Bucket(auth, os.environ['ENDPOINT'], os.environ['BUCKET_NAME'], region=os.environ['REGION'])
+
+with open(os.environ['CERT_PATH'] + '/fullchain.pem', 'r') as f:
+    cert = f.read()
+with open(os.environ['CERT_PATH'] + '/privkey.pem', 'r') as f:
+    key = f.read()
+
+print('正在更新 OSS 自定义域名证书...')
+bucket.put_cname(os.environ['DOMAIN'], cert, key)
+print('OSS 证书更新成功！')
+"
+          
+          # 4. 使用阿里云 CLI 同步更新 CDN 证书
+          echo "正在更新 CDN 证书..."
           CERTIFICATE="$(sudo cat $CERT_PATH/fullchain.pem)"
           PRIVATE_KEY="$(sudo cat $CERT_PATH/privkey.pem)"
-          
-          # 1. 下载并配置阿里云官方 ossutil 工具
-          echo "正在下载 ossutil..."
-          curl -o ossutil.zip https://gosspublic.alicdn.com/ossutil/1.7.19/ossutil-v1.7.19-linux-amd64.zip
-          unzip -o ossutil.zip
-          cd ossutil-v1.7.19-linux-amd64
-          chmod +x ossutil64
-          
-          # 2. 使用 ossutil 更新 OSS 自定义域名证书（修正了这里的语法）
-          echo "正在更新 OSS 证书..."
-          ./ossutil64 cname --method put oss://${{ secrets.BUCKET_NAME }}/${{ secrets.DOMAIN }} \
-            --cert "$CERT_PATH/fullchain.pem" \
-            --key "$CERT_PATH/privkey.pem" \
-            -e "${{ secrets.ENDPOINT }}" \
-            -i "${{ secrets.ACCESS_KEY_ID }}" \
-            -k "${{ secrets.ACCESS_KEY_SECRET }}" -f
-
-          # 3. 使用阿里云 CLI 同步更新 CDN 证书
-          echo "正在更新 CDN 证书..."
-          cd ..
           aliyun cdn SetDomainServerCertificate --DomainName "${{ secrets.DOMAIN }}" --SSLProtocol on --ServerCertificate "$CERTIFICATE" --PrivateKey "$PRIVATE_KEY"
           
           echo "所有证书部署完成！"
