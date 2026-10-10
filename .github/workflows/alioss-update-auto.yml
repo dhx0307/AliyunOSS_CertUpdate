@@ -57,48 +57,60 @@ jobs:
         env:
           ACCESS_KEY_ID: ${{ secrets.ACCESS_KEY_ID }}
           ACCESS_KEY_SECRET: ${{ secrets.ACCESS_KEY_SECRET }}
+          ENDPOINT: ${{ secrets.ENDPOINT }}
+          BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
+          DOMAIN: ${{ secrets.DOMAIN }}
+          REGION: ${{ secrets.REGION }}
+          CERT_PATH: /etc/letsencrypt/live/${{ secrets.DOMAIN }}
         run: |
-          # 1. 设置证书路径
-          CERT_PATH="/etc/letsencrypt/live/${{ secrets.DOMAIN }}"
+          # 1. 安装 Python SDK
+          sudo pip install --upgrade oss2 aliyun-python-sdk-cdn
           
-          # 2. 处理 OSS 证书（通过 XML 文件传递，避开多行文本崩溃）
-          echo "正在更新 OSS 自定义域名证书..."
-          cat << EOF > /tmp/put_cname.xml
-          <BucketCnameConfiguration>
-            <Cname>
-              <Domain>${{ secrets.DOMAIN }}</Domain>
-              <Certificate>
-                <Type>Certificate</Type>
-                <CertContent><![CDATA[$(sudo cat $CERT_PATH/fullchain.pem)]]></CertContent>
-                <PrivateKey><![CDATA[$(sudo cat $CERT_PATH/privkey.pem)]]></PrivateKey>
-              </Certificate>
-            </Cname>
-          </BucketCnameConfiguration>
+          # 2. 将 Python 脚本写入文件
+          cat << 'EOF' > /tmp/deploy_cert.py
+          import os
+          import oss2
+          from aliyunsdkcore.client import AcsClient
+          from aliyunsdkcdn.request.v20141111 import SetDomainServerCertificateRequest
+          
+          ak_id = os.environ['ACCESS_KEY_ID']
+          ak_secret = os.environ['ACCESS_KEY_SECRET']
+          endpoint = os.environ['ENDPOINT']
+          bucket_name = os.environ['BUCKET_NAME']
+          domain = os.environ['DOMAIN']
+          region = os.environ['REGION']
+          cert_path = os.environ['CERT_PATH']
+          
+          with open(os.path.join(cert_path, 'fullchain.pem'), 'r') as f:
+              cert_content = f.read()
+          with open(os.path.join(cert_path, 'privkey.pem'), 'r') as f:
+              private_key = f.read()
+          
+          # 1. 更新 OSS 证书（修正方法名：put_bucket_cname）
+          print('正在更新 OSS 自定义域名证书...')
+          auth = oss2.Auth(ak_id, ak_secret)
+          bucket = oss2.Bucket(auth, endpoint, bucket_name, region=region)
+          bucket.put_bucket_cname(domain, cert_content, private_key)
+          print('OSS 证书更新成功！')
+          
+          # 2. 更新 CDN 证书（使用官方 Python SDK）
+          print('正在更新 CDN 证书...')
+          client = AcsClient(ak_id, ak_secret, region)
+          request = SetDomainServerCertificateRequest.SetDomainServerCertificateRequest()
+          request.set_DomainName(domain)
+          request.set_SSLProtocol("on")
+          request.set_ServerCertificate(cert_content)
+          request.set_PrivateKey(private_key)
+          client.do_action_with_exception(request)
+          print('CDN 证书更新成功！')
           EOF
           
-          aliyun --product Oss --version 2019-05-17 PutCname \
-            --BucketName "${{ secrets.BUCKET_NAME }}" \
-            --body file:///tmp/put_cname.xml \
-            --access-key-id "${{ secrets.ACCESS_KEY_ID }}" \
-            --access-key-secret "${{ secrets.ACCESS_KEY_SECRET }}"
-          
-          # 3. 处理 CDN 证书（通过 JSON 文件传递，用 awk 转义换行符）
-          echo "正在更新 CDN 证书..."
-          CERT_CONTENT=$(sudo cat $CERT_PATH/fullchain.pem | awk '{printf "%s\\n", $0}')
-          PRIVATE_KEY=$(sudo cat $CERT_PATH/privkey.pem | awk '{printf "%s\\n", $0}')
-          
-          cat << EOF > /tmp/cdn_cert.json
-          {
-            "DomainName": "${{ secrets.DOMAIN }}",
-            "SSLProtocol": "on",
-            "ServerCertificate": "$CERT_CONTENT",
-            "PrivateKey": "$PRIVATE_KEY"
-          }
-          EOF
-          
-          aliyun --product Cdn --version 2014-11-11 SetDomainServerCertificate \
-            --body file:///tmp/cdn_cert.json \
-            --access-key-id "${{ secrets.ACCESS_KEY_ID }}" \
-            --access-key-secret "${{ secrets.ACCESS_KEY_SECRET }}"
-          
-          echo "所有证书部署完成！"
+          # 3. 执行脚本（显式传递变量，防止环境变量丢失）
+          sudo ACCESS_KEY_ID="${{ secrets.ACCESS_KEY_ID }}" \
+               ACCESS_KEY_SECRET="${{ secrets.ACCESS_KEY_SECRET }}" \
+               ENDPOINT="${{ secrets.ENDPOINT }}" \
+               BUCKET_NAME="${{ secrets.BUCKET_NAME }}" \
+               DOMAIN="${{ secrets.DOMAIN }}" \
+               REGION="${{ secrets.REGION }}" \
+               CERT_PATH="/etc/letsencrypt/live/${{ secrets.DOMAIN }}" \
+               python3 /tmp/deploy_cert.py
