@@ -58,22 +58,22 @@ jobs:
           
           # 3. 使用内联 Python 脚本直接更新 OSS 证书（绕过区域报错）
           python3 -c "
-import os
-import oss2
-
-auth = oss2.Auth(os.environ['ACCESS_KEY_ID'], os.environ['ACCESS_KEY_SECRET'])
-# 注意：这里明确传入 region，避免 SDK 默认回退到杭州
-bucket = oss2.Bucket(auth, os.environ['ENDPOINT'], os.environ['BUCKET_NAME'], region=os.environ['REGION'])
-
-with open(os.environ['CERT_PATH'] + '/fullchain.pem', 'r') as f:
-    cert = f.read()
-with open(os.environ['CERT_PATH'] + '/privkey.pem', 'r') as f:
-    key = f.read()
-
-print('正在更新 OSS 自定义域名证书...')
-bucket.put_cname(os.environ['DOMAIN'], cert, key)
-print('OSS 证书更新成功！')
-"
+          import os
+          import oss2
+          
+          auth = oss2.Auth(os.environ['ACCESS_KEY_ID'], os.environ['ACCESS_KEY_SECRET'])
+          # 注意：这里明确传入 region，避免 SDK 默认回退到杭州
+          bucket = oss2.Bucket(auth, os.environ['ENDPOINT'], os.environ['BUCKET_NAME'], region=os.environ['REGION'])
+          
+          with open(os.environ['CERT_PATH'] + '/fullchain.pem', 'r') as f:
+              cert = f.read()
+          with open(os.environ['CERT_PATH'] + '/privkey.pem', 'r') as f:
+              key = f.read()
+          
+          print('正在更新 OSS 自定义域名证书...')
+          bucket.put_cname(os.environ['DOMAIN'], cert, key)
+          print('OSS 证书更新成功！')
+          "
           
           # 4. 使用阿里云 CLI 同步更新 CDN 证书
           echo "正在更新 CDN 证书..."
