@@ -41,10 +41,14 @@ jobs:
           # 清理可能存在的旧配置
           acme.sh --remove -d "${{ secrets.DOMAIN }}" || true
           
-          # 注意这里使用的是 --server letsencrypt_test，这才是 acme.sh 指定测试环境的方式
+          # 申请测试证书
           acme.sh --issue --dns dns_ali -d "${{ secrets.DOMAIN }}" --server letsencrypt_test
           
-          # 安装证书
+          # 关键修复：创建目标目录并赋予当前用户权限
+          sudo mkdir -p /etc/letsencrypt/live/${{ secrets.DOMAIN }}
+          sudo chown -R $USER:$USER /etc/letsencrypt/live/
+          
+          # 安装证书（此时目录已存在，且有写入权限）
           acme.sh --install-cert -d "${{ secrets.DOMAIN }}" \
             --key-file /etc/letsencrypt/live/${{ secrets.DOMAIN }}/privkey.pem \
             --fullchain-file /etc/letsencrypt/live/${{ secrets.DOMAIN }}/fullchain.pem
