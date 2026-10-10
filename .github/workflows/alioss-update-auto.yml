@@ -14,10 +14,11 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - name: Init Action
+      - name: Install acme.sh
         run: |
-          sudo apt install -y certbot
-          pip install -r requirements.txt
+          curl https://get.acme.sh | sh -s email=${{ secrets.EMAIL }}
+          # 将 acme.sh 添加到环境变量，方便后续直接调用
+          echo "$HOME/.acme.sh" >> $GITHUB_PATH
 
       - name: Aliyun Cli Tools
         run: |
@@ -32,14 +33,19 @@ jobs:
           sudo mv alidns.sh /usr/local/bin/alidns
           sudo chmod +x /usr/local/bin/alidns
 
-      - name: Apply for a new certificate
+      - name: Issue Certificate with acme.sh
+        env:
+          Ali_Key: ${{ secrets.ACCESS_KEY_ID }}
+          Ali_Secret: ${{ secrets.ACCESS_KEY_SECRET }}
         run: |
-          sudo mkdir -p /etc/letsencrypt/certs
-          # 注意这里加上了 --staging，使用测试环境避免触发频率限制
-          sudo certbot certonly --staging -d "${{ secrets.DOMAIN }}" --manual --preferred-challenges dns \
-                --manual-auth-hook "/usr/local/bin/alidns" \
-                --manual-cleanup-hook "/usr/local/bin/alidns clean" \
-                --agree-tos --email ${{ secrets.EMAIL }} --non-interactive
+          # 使用阿里云 DNS 模式申请证书，--server letsencrypt 默认使用正式环境
+          # 如果测试阶段想避免频率限制，可加 --staging 参数
+          acme.sh --issue --dns dns_ali -d "${{ secrets.DOMAIN }}" --server letsencrypt
+          
+          # 将证书安装到固定路径，方便后续的 Python 脚本读取
+          acme.sh --install-cert -d "${{ secrets.DOMAIN }}" \
+            --key-file /etc/letsencrypt/live/${{ secrets.DOMAIN }}/privkey.pem \
+            --fullchain-file /etc/letsencrypt/live/${{ secrets.DOMAIN }}/fullchain.pem
 
       - name: Deploy Cert to OSS and CDN
         env:
