@@ -58,7 +58,7 @@ jobs:
           export CERT_PATH
           
           # 3. 使用内联 Python 脚本直接更新 OSS 证书（绕过区域报错）
-          python3 -c "
+          sudo python3 -c "
           import os
           import oss2
           
