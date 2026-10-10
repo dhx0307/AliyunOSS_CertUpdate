@@ -46,12 +46,27 @@ jobs:
           CERTIFICATE="$(sudo cat $CERT_PATH/fullchain.pem)"
           PRIVATE_KEY="$(sudo cat $CERT_PATH/privkey.pem)"
           
-          # 1. 更新 OSS 自定义域名的证书
-          echo "正在更新 OSS 证书..."
-          aliyun oss PutCname --BucketName "${{ secrets.BUCKET_NAME }}" --Domain "${{ secrets.DOMAIN }}" --Certificate "$CERTIFICATE" --PrivateKey "$PRIVATE_KEY"
+          # 1. 下载并配置阿里云官方 ossutil 工具
+          echo "正在下载 ossutil..."
+          curl -o ossutil.zip https://gosspublic.alicdn.com/ossutil/1.7.19/ossutil-v1.7.19-linux-amd64.zip
+          unzip -o ossutil.zip
+          cd ossutil-v1.7.19-linux-amd64
+          chmod +x ossutil64
           
-          # 2. 同步更新 CDN 加速域名的证书（关键！）
+          # 2. 使用 ossutil 更新 OSS 自定义域名证书（它会自动处理多行文本和签名）
+          echo "正在更新 OSS 证书..."
+          ./ossutil64 cname --method put \
+            --bucket "${{ secrets.BUCKET_NAME }}" \
+            --cname "${{ secrets.DOMAIN }}" \
+            --cert "$CERT_PATH/fullchain.pem" \
+            --key "$CERT_PATH/privkey.pem" \
+            -e "${{ secrets.ENDPOINT }}" \
+            -i "${{ secrets.ACCESS_KEY_ID }}" \
+            -k "${{ secrets.ACCESS_KEY_SECRET }}" -f
+
+          # 3. 使用阿里云 CLI 同步更新 CDN 证书
           echo "正在更新 CDN 证书..."
+          cd ..
           aliyun cdn SetDomainServerCertificate --DomainName "${{ secrets.DOMAIN }}" --SSLProtocol on --ServerCertificate "$CERTIFICATE" --PrivateKey "$PRIVATE_KEY"
           
-          echo "证书部署完成！"
+          echo "所有证书部署完成！"
