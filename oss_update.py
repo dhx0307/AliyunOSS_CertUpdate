@@ -37,28 +37,53 @@ class OSS:
                 print(f"最后修改时间： {c.last_modified}")  # 打印绑定自定义域名的时间
         return list_result.cname
 
-    def _update_cname(self, cname_info: CnameInfo, private_key: str, certificate: str):
-        # 检查是否已绑定证书和证书是否过期
-        create_new_cert = True  # 默认创建一个新的证书
-        if cname_info.certificate:
-            exp_date_obj = datetime.strptime(
-                cname_info.certificate.valid_end_date,
-                '%b %d %H:%M:%S %Y GMT'
-            ).replace(tzinfo=timezone.utc)
-            if exp_date_obj > datetime.now(timezone.utc):  # 证书未过期
-                create_new_cert = False
+    @staticmethod
+    def _parse_expire(cert) -> datetime | None:
+        """解析旧证书到期时间；字段为空（如阿里云证书服务 CAS 托管的证书）或格式不认识时返回 None。"""
+        value = getattr(cert, 'valid_end_date', None)
+        if not value:
+            return None
+        for fmt in ('%b %d %H:%M:%S %Y GMT', '%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%SZ'):
+            try:
+                return datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+        return None
 
-        if create_new_cert:  # 如果没有绑定证书，直接传入证书内容，会创建一个新的证书
-            print("证书已过期或未绑定证书，将创建新的证书")
-            cert = oss2.models.CertInfo(certificate=certificate, private_key=private_key, force=True)
-        else:  # 如果已经绑定了证书且证书未过期
-            print("证书未过期，将更新证书。当前证书信息如下：")
-            print(vars(cname_info.certificate))
-            cert = oss2.models.CertInfo(previous_cert_id=cname_info.certificate.cert_id,
-                                        certificate=certificate, private_key=private_key, force=True)
-
-        input_ = oss2.models.PutBucketCnameRequest(cname_info.domain, cert)
+    def _put_cname(self, domain: str, cert):
+        input_ = oss2.models.PutBucketCnameRequest(domain, cert)
         self.bucket.put_bucket_cname(input_)
+
+    def _update_cname(self, cname_info: CnameInfo, private_key: str, certificate: str):
+        old_cert = cname_info.certificate
+        old_cert_id = getattr(old_cert, 'cert_id', None) if old_cert else None
+        expire = self._parse_expire(old_cert) if old_cert else None
+
+        # 没有绑定证书，或者能确认旧证书已过期 -> 创建新证书
+        # 绑定了证书且（未过期，或到期时间未知，例如 CAS 证书）-> 用 previous_cert_id 替换
+        replace_mode = bool(old_cert_id) and not (expire is not None and expire <= datetime.now(timezone.utc))
+
+        new_cert = oss2.models.CertInfo(certificate=certificate, private_key=private_key, force=True)
+
+        if not replace_mode:
+            print("证书已过期或未绑定证书，将创建新的证书")
+            self._put_cname(cname_info.domain, new_cert)
+            return
+
+        if expire is None:
+            print("旧证书未返回到期时间（可能是阿里云证书服务托管的证书），将直接替换。当前证书信息如下：")
+        else:
+            print("证书未过期，将更新证书。当前证书信息如下：")
+        print(vars(old_cert))
+
+        replace_cert = oss2.models.CertInfo(previous_cert_id=old_cert_id,
+                                            certificate=certificate, private_key=private_key, force=True)
+        try:
+            self._put_cname(cname_info.domain, replace_cert)
+        except oss2.exceptions.OssError as e:
+            # 替换失败时，退回到“直接绑定新证书”的方式再试一次
+            print(f"替换旧证书失败（{e.code}），改为直接绑定新证书重试")
+            self._put_cname(cname_info.domain, new_cert)
 
 
 def main():
