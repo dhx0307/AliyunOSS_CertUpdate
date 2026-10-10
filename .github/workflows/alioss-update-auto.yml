@@ -62,7 +62,7 @@ jobs:
           DOMAIN: ${{ secrets.DOMAIN }}
           REGION: ${{ secrets.REGION }}
         run: |
-          # 1. 安装/升级阿里云 OSS Python SDK
+          # 1. 确保 oss2 是最新版本（关键，必须包含 put_cname 方法）
           sudo pip install --upgrade oss2
           
           # 2. 设置证书路径
@@ -81,23 +81,10 @@ jobs:
           with open(os.environ['CERT_PATH'] + '/privkey.pem', 'r') as f:
               private_key = f.read()
           
-          xml_body = f'''<BucketCnameConfiguration>
-            <Cname>
-              <Domain>{os.environ['DOMAIN']}</Domain>
-              <Certificate>
-                <Type>Certificate</Type>
-                <CertContent><![CDATA[{cert_content}]]></CertContent>
-                <PrivateKey><![CDATA[{private_key}]]></PrivateKey>
-              </Certificate>
-            </Cname>
-          </BucketCnameConfiguration>'''
-          
-          headers = {'Content-Type': 'application/xml'}
-          params = {'cname': ''}
-          print('正在通过 OSS API 更新自定义域名证书...')
-          
-          # 关键修复：key 必须是空字符串 ''，不能是 '/'
-          resp = bucket._do('PUT', bucket_name=os.environ['BUCKET_NAME'], key='', params=params, headers=headers, data=xml_body)
+          print('正在通过 OSS SDK 更新自定义域名证书...')
+          # 直接调用官方封装好的方法，SDK 会自动处理 XML 和签名
+          bucket.put_cname(os.environ['DOMAIN'], cert_content, private_key)
+          print('OSS 证书更新成功！')
           EOF
           
           # 4. 执行脚本
