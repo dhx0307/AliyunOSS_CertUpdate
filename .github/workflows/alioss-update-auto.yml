@@ -96,8 +96,8 @@ jobs:
           params = {'cname': ''}
           print('正在通过 OSS API 更新自定义域名证书...')
           
-          # 关键修复：显式传入 bucket_name，对齐 SDK 底层参数
-          resp = bucket._do('PUT', bucket_name=os.environ['BUCKET_NAME'], key='/', params=params, headers=headers, body=xml_body)
+          # 关键修复：将 body 改为 data
+          resp = bucket._do('PUT', bucket_name=os.environ['BUCKET_NAME'], key='/', params=params, headers=headers, data=xml_body)
           print('OSS 证书更新成功！')
           EOF
           
