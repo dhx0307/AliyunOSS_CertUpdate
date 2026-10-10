@@ -53,11 +53,9 @@ jobs:
           cd ossutil-v1.7.19-linux-amd64
           chmod +x ossutil64
           
-          # 2. 使用 ossutil 更新 OSS 自定义域名证书（它会自动处理多行文本和签名）
+          # 2. 使用 ossutil 更新 OSS 自定义域名证书（修正了这里的语法）
           echo "正在更新 OSS 证书..."
-          ./ossutil64 cname --method put \
-            --bucket "${{ secrets.BUCKET_NAME }}" \
-            --cname "${{ secrets.DOMAIN }}" \
+          ./ossutil64 cname --method put oss://${{ secrets.BUCKET_NAME }}/${{ secrets.DOMAIN }} \
             --cert "$CERT_PATH/fullchain.pem" \
             --key "$CERT_PATH/privkey.pem" \
             -e "${{ secrets.ENDPOINT }}" \
