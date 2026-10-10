@@ -41,8 +41,8 @@ jobs:
           # 清理可能存在的旧配置
           acme.sh --remove -d "${{ secrets.DOMAIN }}" || true
           
-          # 申请测试证书
-          acme.sh --issue --dns dns_ali -d "${{ secrets.DOMAIN }}" --server letsencrypt_test
+          # 申请测试证书（加上 --dnssleep 120，给 DNS 传播留足时间）
+          acme.sh --issue --dns dns_ali -d "${{ secrets.DOMAIN }}" --server letsencrypt_test --dnssleep 120
           
           # 关键修复：创建目标目录并赋予当前用户权限
           sudo mkdir -p /etc/letsencrypt/live/${{ secrets.DOMAIN }}
