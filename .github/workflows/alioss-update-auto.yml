@@ -51,7 +51,7 @@ jobs:
           REGION: ${{ secrets.REGION }}
         run: |
           # 1. 安装阿里云 OSS Python SDK
-          pip install oss2
+          sudo pip install oss2
           
           # 2. 设置证书路径
           CERT_PATH="/etc/letsencrypt/live/${{ secrets.DOMAIN }}"
