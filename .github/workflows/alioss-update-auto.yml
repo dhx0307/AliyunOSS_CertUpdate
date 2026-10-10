@@ -54,46 +54,56 @@ jobs:
             --fullchain-file /etc/letsencrypt/live/${{ secrets.DOMAIN }}/fullchain.pem
 
       - name: Deploy Cert to OSS and CDN
-        env:
-          ACCESS_KEY_ID: ${{ secrets.ACCESS_KEY_ID }}
-          ACCESS_KEY_SECRET: ${{ secrets.ACCESS_KEY_SECRET }}
-          ENDPOINT: ${{ secrets.ENDPOINT }}
-          BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
-          DOMAIN: ${{ secrets.DOMAIN }}
-          REGION: ${{ secrets.REGION }}
         run: |
-          # 1. 确保 oss2 是最新版本（关键，必须包含 put_cname 方法）
+          # 1. 确保 oss2 是最新版本
           sudo pip install --upgrade oss2
           
           # 2. 设置证书路径
-          export CERT_PATH="/etc/letsencrypt/live/${{ secrets.DOMAIN }}"
+          CERT_PATH="/etc/letsencrypt/live/${{ secrets.DOMAIN }}"
           
           # 3. 写入 Python 脚本
           cat << 'EOF' > /tmp/update_cert.py
           import os
+          import sys
           import oss2
           
-          auth = oss2.Auth(os.environ['ACCESS_KEY_ID'], os.environ['ACCESS_KEY_SECRET'])
-          bucket = oss2.Bucket(auth, os.environ['ENDPOINT'], os.environ['BUCKET_NAME'], region=os.environ['REGION'])
+          # 手动从环境变量读取，如果没有就读不到
+          ak_id = os.environ.get('ACCESS_KEY_ID')
+          ak_secret = os.environ.get('ACCESS_KEY_SECRET')
+          endpoint = os.environ.get('ENDPOINT')
+          bucket_name = os.environ.get('BUCKET_NAME')
+          domain = os.environ.get('DOMAIN')
+          region = os.environ.get('REGION')
+          cert_path = os.environ.get('CERT_PATH')
           
-          with open(os.environ['CERT_PATH'] + '/fullchain.pem', 'r') as f:
+          if not all([ak_id, ak_secret, endpoint, bucket_name, domain, region, cert_path]):
+              print("Error: Missing environment variables!", file=sys.stderr)
+              sys.exit(1)
+          
+          with open(os.path.join(cert_path, 'fullchain.pem'), 'r') as f:
               cert_content = f.read()
-          with open(os.environ['CERT_PATH'] + '/privkey.pem', 'r') as f:
+          with open(os.path.join(cert_path, 'privkey.pem'), 'r') as f:
               private_key = f.read()
           
           print('正在通过 OSS SDK 更新自定义域名证书...')
-          # 直接调用官方封装好的方法，SDK 会自动处理 XML 和签名
-          bucket.put_cname(os.environ['DOMAIN'], cert_content, private_key)
+          auth = oss2.Auth(ak_id, ak_secret)
+          bucket = oss2.Bucket(auth, endpoint, bucket_name, region=region)
+          bucket.put_cname(domain, cert_content, private_key)
           print('OSS 证书更新成功！')
           EOF
           
-          # 4. 执行脚本
-          sudo -E python3 /tmp/update_cert.py
+          # 4. 执行脚本（显式传递变量，并强制输出错误）
+          sudo ACCESS_KEY_ID="${{ secrets.ACCESS_KEY_ID }}" \
+               ACCESS_KEY_SECRET="${{ secrets.ACCESS_KEY_SECRET }}" \
+               ENDPOINT="${{ secrets.ENDPOINT }}" \
+               BUCKET_NAME="${{ secrets.BUCKET_NAME }}" \
+               DOMAIN="${{ secrets.DOMAIN }}" \
+               REGION="${{ secrets.REGION }}" \
+               CERT_PATH="/etc/letsencrypt/live/${{ secrets.DOMAIN }}" \
+               python3 /tmp/update_cert.py 2>&1
           
-          # 5. CDN 部分（再次强烈建议先手动去阿里云控制台更新，先注释掉）
+          # 5. CDN 部分（先注释掉，手动去控制台更新）
           # echo "正在更新 CDN 证书..."
-          # CERTIFICATE="$(sudo cat $CERT_PATH/fullchain.pem)"
-          # PRIVATE_KEY="$(sudo cat $CERT_PATH/privkey.pem)"
-          # aliyun cdn SetDomainServerCertificate --DomainName "${{ secrets.DOMAIN }}" --SSLProtocol on --ServerCertificate "$CERTIFICATE" --PrivateKey "$PRIVATE_KEY"
+          # aliyun cdn SetDomainServerCertificate --DomainName "${{ secrets.DOMAIN }}" --SSLProtocol on --ServerCertificate "$(sudo cat $CERT_PATH/fullchain.pem)" --PrivateKey "$(sudo cat $CERT_PATH/privkey.pem)"
           
-          echo "OSS 证书部署完成！请前往 CDN 控制台手动更新 CDN 证书！"
+          echo "OSS 证书部署完成！"
