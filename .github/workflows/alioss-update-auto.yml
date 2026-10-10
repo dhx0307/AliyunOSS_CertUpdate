@@ -11,6 +11,10 @@ on:
         description: "测试模式：用 Let's Encrypt 测试环境申请证书，不部署（不消耗正式额度）"
         type: boolean
         default: false
+      deploy_staging:
+        description: "配合测试模式：把测试证书也部署到 OSS/CDN（浏览器会提示不安全，仅用于演练流程）"
+        type: boolean
+        default: false
       force:
         description: "强制申请新证书（忽略剩余有效期检查，会消耗正式额度！）"
         type: boolean
@@ -37,10 +41,18 @@ jobs:
         run: |
           DAYS=0
           # 加超时：域名连不上时最多等 15 秒，不能无限挂住
-          END=$(echo | timeout 15 openssl s_client -servername "$DOMAIN" -connect "$DOMAIN:443" 2>/dev/null \
-                | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2 || true)
-          if [ -n "$END" ]; then
+          PEM=$(echo | timeout 15 openssl s_client -servername "$DOMAIN" -connect "$DOMAIN:443" 2>/dev/null \
+                | openssl x509 2>/dev/null || true)
+          if [ -n "$PEM" ]; then
+            END=$(echo "$PEM" | openssl x509 -noout -enddate | cut -d= -f2)
+            ISSUER=$(echo "$PEM" | openssl x509 -noout -issuer)
+            echo "线上证书签发者：$ISSUER"
             DAYS=$(( ( $(date -d "$END" +%s) - $(date +%s) ) / 86400 ))
+            # 线上是测试证书（不被信任）时，视为需要立即换成正式证书
+            if echo "$ISSUER" | grep -qi "staging"; then
+              echo "检测到线上是测试证书，视为需要更换"
+              DAYS=0
+            fi
           fi
           echo "线上证书剩余天数：$DAYS"
 
@@ -85,7 +97,7 @@ jobs:
                 --agree-tos --email "${{ secrets.EMAIL }}" --non-interactive $EXTRA
 
       - name: Run OSS Cert Update
-        if: steps.check.outputs.need == 'true' && inputs.staging != true
+        if: steps.check.outputs.need == 'true' && (inputs.staging != true || inputs.deploy_staging == true)
         run: |
           CERT_PATH="/etc/letsencrypt/live/${{ secrets.DOMAIN }}"
           export CERTIFICATE="$(sudo cat $CERT_PATH/fullchain.pem)"
@@ -101,7 +113,7 @@ jobs:
 
       # 更新 CDN 证书（用 sudo，复用上面给 root 配好的 aliyun 凭证）
       - name: Update CDN Cert
-        if: steps.check.outputs.need == 'true' && inputs.staging != true
+        if: steps.check.outputs.need == 'true' && (inputs.staging != true || inputs.deploy_staging == true)
         run: |
           CERT_PATH="/etc/letsencrypt/live/${{ secrets.DOMAIN }}"
           CERT_NAME="cert-$(date -u +%Y%m%d%H%M%S)"
